@@ -5,5 +5,5 @@ numpy
 yfinance
 python-binance
 requests
-tensorflow
-scikit-learn
+tensorflow-cpu==2.15.0
+scikit-learn--no-binary :all:
