@@ -6,4 +6,4 @@ yfinance
 python-binance
 requests
 tensorflow-cpu==2.15.0
-scikit-learn--no-binary :all:
+scikit-learn==1.4.1.post1
