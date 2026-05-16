@@ -1,41 +1,38 @@
-import streamlit as st
+from fastapi import FastAPI
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
-from binance.client import Client
-import requests
-import os
-from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM, Dropout, Input
+import requests
+import os
 
-# --- CONFIG & SECRETS ---
-MY_CHAT_ID = "7710155531"
-BINANCE_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET = os.getenv("BINANCE_SECRET_KEY")
-TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+app = FastAPI()
 
-def send_telegram(message, target_id):
-    if TG_TOKEN and target_id:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage?chat_id={target_id}&text={message}"
-        try: requests.get(url)
-        except: pass
+# Kredensial Supabase
+SUPA_URL = "https://nzpzddyjcthhzkyfrjpb.supabase.co"
+SUPA_KEY = os.getenv("SUPABASE_KEY") # Masukkan Anon Key tadi di Secrets HF
 
-# --- ENGINE AI CHRONOS ---
+def save_to_supabase(data):
+    url = f"{SUPA_URL}/rest/v1/signals"
+    headers = {
+        "apikey": SUPA_KEY,
+        "Authorization": f"Bearer {SUPA_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+    requests.post(url, json=data, headers=headers)
+
 def run_ai_logic():
-    # Gunakan period lebih pendek agar warmup cepat di HF Free Tier
     df = yf.download('BTC-USD', period='60d', interval='1d', auto_adjust=True)
     df_close = df[['Close']].copy()
-    
-    # Perbaikan: Ambil angka terakhir sebagai FLOAT murni
     current_price = float(df_close['Close'].iloc[-1])
     
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(df_close)
     
-    lookback = 30 # Kurangi lookback untuk efisiensi RAM HF
+    lookback = 30
     X = []
     for i in range(lookback, len(scaled_data)):
         X.append(scaled_data[i-lookback:i, 0])
@@ -61,38 +58,19 @@ def run_ai_logic():
     
     return current_price, final_pred, fng_val
 
-# --- DASHBOARD UI ---
-st.set_page_config(page_title="CHRONOS TERMINAL", layout="wide")
-st.title("🛡️ Chronos AI Command Center")
-
-try:
-    with st.spinner('AI sedang menganalisis pasar...'):
-        curr, pred, fng = run_ai_logic()
-    
+@app.get("/predict")
+def get_prediction():
+    curr, pred, fng = run_ai_logic()
     signal = "BUY" if pred > curr and fng > 35 else "HOLD/SELL"
     
-    # AUTO-REPORT UNTUK OWNER
-    now = datetime.now()
-    if now.hour == 7 and now.minute <= 5:
-        msg = f"🤖 CHRONOS AUTO-REPORT\nPrice: ${curr:,.2f}\nPred: ${pred:,.2f}\nSignal: {signal}"
-        send_telegram(msg, MY_CHAT_ID)
-
-    # UI DISPLAY
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Live Price", f"${curr:,.2f}")
-    col2.metric("AI Target", f"${pred:,.2f}", delta=f"{((pred/curr)-1)*100:.2f}%")
-    col3.metric("F&G Index", f"{fng}")
-
-    st.divider()
-    st.header(f"Recommended Action: {signal}")
-
-    # SIDEBAR CONTROLS
-    st.sidebar.header("🕹️ Owner Controls")
-    if st.sidebar.button("🚀 EXECUTE BUY"):
-        if BINANCE_KEY:
-            send_telegram(f"✅ Order Executed: Buy BTC at ${curr:,.2f}", MY_CHAT_ID)
-            st.sidebar.success("Signal Sent to Binance")
-        else: st.sidebar.error("Secrets missing")
-
-except Exception as e:
-    st.error(f"Terjadi kesalahan teknis: {e}")
+    payload = {
+        "price": curr,
+        "prediction": pred,
+        "fng_index": fng,
+        "signal_type": signal
+    }
+    
+    # Kirim data ke Supabase agar Vercel bisa baca history-nya
+    save_to_supabase(payload)
+    
+    return payload
