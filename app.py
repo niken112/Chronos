@@ -22,20 +22,18 @@ def send_telegram(msg):
         except: pass
 
 def get_crypto_data_global():
-    """Menggunakan public API Tokocrypto (Binance Cloud) yang bebas blokir wilayah di HF"""
+    """Menggunakan Binance Vision API (Jalur Tol Global, Bebas Blokir Wilayah & Anti-Timeout)"""
     try:
-        # Mengambil data candlestick/kline BTCUSDT interval 1 hari (1d) sebanyak 60 baris
-        url = "https://api.tokocrypto.com/open/v1/market/klines?symbol=BTC_USDT&intervals=1d&limit=60"
+        # Menggunakan endpoint api.binance.vision yang ramah buat server US
+        url = "https://api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=60"
         res = requests.get(url, timeout=10).json()
         
-        if res.get("code") != 0 or not res.get("data"):
-            return None, f"API Error: {res.get('msg', 'Unknown')}"
+        # Format data Binance: [[openTime, open, high, low, close, volume, ...], ...]
+        if isinstance(res, dict) and "code" in res:
+            return None, f"Binance Vision Error: {res.get('msg')}"
             
-        # Format data dari Tokocrypto: [openTime, open, high, low, close, volume, ...]
-        raw_data = res["data"]
-        
         # Ambil harga close (index ke-4)
-        closes = [float(item[4]) for item in raw_data]
+        closes = [float(item[4]) for item in res]
         
         df = pd.DataFrame(closes, columns=['close'])
         return df, None
@@ -53,7 +51,7 @@ def get_prediction():
     try:
         df, err = get_crypto_data_global()
         if err: 
-            return {"error": "Gagal mengambil data market", "detail": err}
+            return {"error": "Gagal mengambil data market via Jalur Tol Global", "detail": err}
             
         current_price = float(df['close'].iloc[-1])
         
@@ -80,7 +78,7 @@ def get_prediction():
         save_to_supabase(payload)
         
         # Kirim Laporan ke Telegram
-        msg = f"🛡️ CHRONOS AI REPORT\n\nPrice: ${current_price:,.2f}\nPred: ${final_pred:,.2f}\nSignal: {signal}\n\n🤖 Server Status: Stable"
+        msg = f"🛡️ CHRONOS AI REPORT\n\nPrice: ${current_price:,.2f}\nPred: ${final_pred:,.2f}\nSignal: {signal}\n\n🤖 Server Status: Super Stable"
         send_telegram(msg)
         
         return {**payload, "telegram_status": "Pesan dikirim"}
@@ -89,4 +87,4 @@ def get_prediction():
 
 @app.get("/")
 def health():
-    return {"status": "Chronos Online", "engine": "Tokocrypto Data Stream"}
+    return {"status": "Chronos Online", "engine": "Binance Vision Data Stream"}
