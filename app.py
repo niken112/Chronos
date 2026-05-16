@@ -22,23 +22,41 @@ def send_telegram(msg):
         except: pass
 
 def get_crypto_data_global():
-    """Menggunakan Binance Vision API (Jalur Tol Global, Bebas Blokir Wilayah & Anti-Timeout)"""
+    """Sistem Autopilot Multi-Jalur (Failover) untuk Menjamin Data Pasti Masuk"""
+    
+    # JALUR 1: Binance Vision API
     try:
-        # Menggunakan endpoint api.binance.vision yang ramah buat server US
         url = "https://api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=60"
-        res = requests.get(url, timeout=10).json()
-        
-        # Format data Binance: [[openTime, open, high, low, close, volume, ...], ...]
-        if isinstance(res, dict) and "code" in res:
-            return None, f"Binance Vision Error: {res.get('msg')}"
-            
-        # Ambil harga close (index ke-4)
-        closes = [float(item[4]) for item in res]
-        
-        df = pd.DataFrame(closes, columns=['close'])
-        return df, None
+        res = requests.get(url, timeout=5).json()
+        if isinstance(res, list) and len(res) > 0:
+            closes = [float(item[4]) for item in res]
+            return pd.DataFrame(closes, columns=['close']), None
     except Exception as e:
-        return None, str(e)
+        print(f"Jalur 1 Gagal: {str(e)}")
+
+    # JALUR 2: Tokocrypto API (Binance Cloud)
+    try:
+        url = "https://api.tokocrypto.com/open/v1/market/klines?symbol=BTC_USDT&intervals=1d&limit=60"
+        res = requests.get(url, timeout=5).json()
+        if res.get("code") == 0 and res.get("data"):
+            closes = [float(item[4]) for item in res["data"]]
+            return pd.DataFrame(closes, columns=['close']), None
+    except Exception as e:
+        print(f"Jalur 2 Gagal: {str(e)}")
+
+    # JALUR 3: CoinGecko Public API (Benteng Terakhir)
+    try:
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=60&interval=daily"
+        res = requests.get(url, timeout=5).json()
+        if "prices" in res:
+            # Format CoinGecko: [[timestamp, price], ...]
+            closes = [float(item[1]) for item in res["prices"]]
+            # Ambil 60 data teratas/terakhir
+            return pd.DataFrame(closes[:60], columns=['close']), None
+    except Exception as e:
+        print(f"Jalur 3 Gagal: {str(e)}")
+
+    return None, "Semua jalur API (Binance, Tokocrypto, CoinGecko) sedang down/timeout."
 
 def save_to_supabase(payload):
     if not SUPA_KEY: return
@@ -51,7 +69,7 @@ def get_prediction():
     try:
         df, err = get_crypto_data_global()
         if err: 
-            return {"error": "Gagal mengambil data market via Jalur Tol Global", "detail": err}
+            return {"error": "Gagal mengambil data market", "detail": err}
             
         current_price = float(df['close'].iloc[-1])
         
@@ -78,7 +96,7 @@ def get_prediction():
         save_to_supabase(payload)
         
         # Kirim Laporan ke Telegram
-        msg = f"🛡️ CHRONOS AI REPORT\n\nPrice: ${current_price:,.2f}\nPred: ${final_pred:,.2f}\nSignal: {signal}\n\n🤖 Server Status: Super Stable"
+        msg = f"🛡️ CHRONOS AI REPORT\n\nPrice: ${current_price:,.2f}\nPred: ${final_pred:,.2f}\nSignal: {signal}\n\n🤖 Server Status: Ultra Secure (Triple API)"
         send_telegram(msg)
         
         return {**payload, "telegram_status": "Pesan dikirim"}
@@ -87,4 +105,4 @@ def get_prediction():
 
 @app.get("/")
 def health():
-    return {"status": "Chronos Online", "engine": "Binance Vision Data Stream"}
+    return {"status": "Chronos Online", "engine": "Triple-Route Failover System"}
