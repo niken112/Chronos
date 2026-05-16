@@ -1,4 +1,5 @@
-streamlit
+fastapi
+uvicorn
 pandas
 numpy
 yfinance
@@ -6,4 +7,3 @@ python-binance
 requests
 tensorflow
 scikit-learn
-matplotlib
