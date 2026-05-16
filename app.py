@@ -5,15 +5,40 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM, Input
+from binance.client import Client
 import requests
 import os
-import time
 
 app = FastAPI()
 
-# Kredensial Supabase
+# --- CONFIG & SECRETS ---
 SUPA_URL = "https://nzpzddyjcthhzkyfrjpb.supabase.co"
 SUPA_KEY = os.getenv("SUPABASE_KEY")
+TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BIN_KEY = os.getenv("BINANCE_API_KEY")
+BIN_SEC = os.getenv("BINANCE_SECRET_KEY")
+
+# --- TOOLS ---
+def send_telegram(msg):
+    if TG_TOKEN and TG_CHAT_ID:
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        try: requests.post(url, json={"chat_id": TG_CHAT_ID, "text": msg})
+        except: pass
+
+def get_binance_balance():
+    if not BIN_KEY or not BIN_SEC:
+        return "Key Missing"
+    try:
+        client = Client(BIN_KEY, BIN_SEC)
+        acc = client.get_account()
+        balances = {item['asset']: item['free'] for item in acc['balances'] if float(item['free']) > 0}
+        # Fokus ke USDT dan BTC
+        usdt = balances.get('USDT', '0')
+        btc = balances.get('BTC', '0')
+        return f"💰 Wallet: {usdt} USDT | {btc} BTC"
+    except:
+        return "Binance Auth Failed"
 
 def save_to_supabase(payload):
     if not SUPA_KEY: return
@@ -21,79 +46,49 @@ def save_to_supabase(payload):
     try: requests.post(f"{SUPA_URL}/rest/v1/signals", json=payload, headers=headers, timeout=5)
     except: pass
 
-def get_crypto_data(retries=3):
-    """Fungsi ambil data dengan mekanisme retry agar tahan banting"""
-    for i in range(retries):
-        try:
-            df = yf.download('BTC-USD', period='60d', interval='1d', auto_adjust=True, progress=False)
-            if not df.empty and len(df) > 30:
-                return df
-        except Exception as e:
-            print(f"Retry {i+1} failed: {e}")
-            time.sleep(2)
-    return None
-
+# --- AI LOGIC ---
 def run_ai_logic():
-    df = get_crypto_data()
-    if df is None:
-        raise ValueError("Data pasar tidak tersedia (Rate Limit Yahoo Finance)")
-
-    # Handle multi-index columns dari yfinance baru
-    if isinstance(df.columns, pd.MultiIndex):
-        close_series = df['Close'].iloc[:, 0]
-    else:
-        close_series = df['Close']
+    df = yf.download('BTC-USD', period='60d', interval='1d', auto_adjust=True, progress=False)
+    if df.empty: raise ValueError("Yahoo Finance Limit")
     
+    close_series = df['Close'].iloc[:, 0] if isinstance(df.columns, pd.MultiIndex) else df['Close']
     current_price = float(close_series.iloc[-1])
     
-    # Preprocessing
-    data_df = close_series.to_frame()
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(data_df)
+    scaled_data = scaler.fit_transform(close_series.to_frame())
     
     lookback = 15
-    X, y = [], []
-    for i in range(lookback, len(scaled_data)):
-        X.append(scaled_data[i-lookback:i, 0])
-        y.append(scaled_data[i, 0])
+    X = np.array([scaled_data[i-lookback:i, 0] for i in range(lookback, len(scaled_data))])
+    X = X.reshape(-1, lookback, 1)
     
-    X = np.array(X).reshape(-1, lookback, 1)
-    y = np.array(y)
-    
-    # Model Super Fast
-    model = Sequential([
-        Input(shape=(lookback, 1)),
-        LSTM(16),
-        Dense(1)
-    ])
+    model = Sequential([Input(shape=(lookback, 1)), LSTM(16), Dense(1)])
     model.compile(optimizer='adam', loss='mse')
-    model.fit(X, y, epochs=2, batch_size=32, verbose=0)
+    model.fit(X, scaled_data[lookback:], epochs=2, verbose=0)
     
-    # Predict
-    last_input = scaled_data[-lookback:].reshape(1, lookback, 1)
-    pred_scaled = model.predict(last_input, verbose=0)
+    pred_scaled = model.predict(scaled_data[-lookback:].reshape(1, lookback, 1), verbose=0)
     final_pred = float(scaler.inverse_transform(pred_scaled).flatten()[0])
     
     return current_price, final_pred
 
-@app.get("/")
-def home():
-    return {"status": "Chronos Online", "info": "Use /predict to run AI"}
-
+# --- ENDPOINTS ---
 @app.get("/predict")
 def get_prediction():
     try:
         curr, pred = run_ai_logic()
-        signal = "BUY" if pred > curr else "HOLD/SELL"
+        signal = "BUY 🟢" if pred > curr else "HOLD/SELL 🔴"
+        wallet = get_binance_balance()
         
-        payload = {
-            "price": curr,
-            "prediction": pred,
-            "fng_index": 50, # Static if API fails
-            "signal_type": signal
-        }
-        
+        payload = {"price": curr, "prediction": pred, "fng_index": 50, "signal_type": signal}
         save_to_supabase(payload)
-        return payload
+        
+        # LOG TO TELEGRAM
+        msg = f"🛡️ CHRONOS REPORT\n\nPrice: ${curr:,.2f}\nPred: ${pred:,.2f}\nSignal: {signal}\n\n{wallet}"
+        send_telegram(msg)
+        
+        return {**payload, "wallet": wallet}
     except Exception as e:
-        return {"error": "Backend Busy or Rate Limited", "detail": str(e)}
+        return {"error": str(e)}
+
+@app.get("/")
+def health():
+    return {"status": "Chronos Online"}
