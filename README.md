@@ -2,7 +2,7 @@
 title: Chronos
 emoji: 🛡️
 colorFrom: blue
-colorTo: black
+colorTo: gray
 sdk: streamlit
 app_file: app.py
 pinned: false
