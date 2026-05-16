@@ -12,25 +12,38 @@ app = FastAPI()
 
 # Kredensial Supabase
 SUPA_URL = "https://nzpzddyjcthhzkyfrjpb.supabase.co"
-SUPA_KEY = os.getenv("SUPABASE_KEY") # Masukkan Anon Key tadi di Secrets HF
+SUPA_KEY = os.getenv("SUPABASE_KEY")
 
 def save_to_supabase(data):
+    if not SUPA_KEY:
+        return
     url = f"{SUPA_URL}/rest/v1/signals"
     headers = {
         "apikey": SUPA_KEY,
         "Authorization": f"Bearer {SUPA_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal"
+        "Content-Type": "application/json"
     }
-    requests.post(url, json=data, headers=headers)
+    try:
+        requests.post(url, json=data, headers=headers)
+    except:
+        pass
 
 def run_ai_logic():
+    # Ambil data
     df = yf.download('BTC-USD', period='60d', interval='1d', auto_adjust=True)
-    df_close = df[['Close']].copy()
-    current_price = float(df_close['Close'].iloc[-1])
     
+    # PERBAIKAN KRUSIAL: Pastikan kita dapat angka tunggal meskipun datanya multi-index
+    if isinstance(df['Close'], pd.DataFrame):
+        close_series = df['Close'].iloc[:, 0]
+    else:
+        close_series = df['Close']
+        
+    current_price = float(close_series.iloc[-1])
+    
+    # Preprocessing
+    data_df = close_series.to_frame()
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df_close)
+    scaled_data = scaler.fit_transform(data_df)
     
     lookback = 30
     X = []
@@ -39,24 +52,35 @@ def run_ai_logic():
     X = np.array(X)
     X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     
+    # Model Lite
     model = Sequential([
         Input(shape=(X.shape[1], 1)),
         LSTM(50, return_sequences=True),
-        Dropout(0.2),
+        Dropout(0.1),
         LSTM(50),
         Dense(1)
     ])
     model.compile(optimizer='adam', loss='mse')
-    model.fit(X, scaled_data[lookback:], epochs=5, batch_size=16, verbose=0)
+    model.fit(X, scaled_data[lookback:], epochs=3, batch_size=32, verbose=0)
     
+    # Predict
     last_data = scaled_data[-lookback:].reshape(1, lookback, 1)
     pred_scaled = model.predict(last_data, verbose=0)
-    final_pred = float(scaler.inverse_transform(pred_scaled)[0][0])
+    final_pred = float(scaler.inverse_transform(pred_scaled).flatten()[0])
     
-    fng_res = requests.get('https://api.alternative.me/fng/').json()
-    fng_val = int(fng_res['data'][0]['value'])
+    # Fear and Greed
+    fng_val = 50 # Default jika API gagal
+    try:
+        fng_res = requests.get('https://api.alternative.me/fng/').json()
+        fng_val = int(fng_res['data'][0]['value'])
+    except:
+        pass
     
     return current_price, final_pred, fng_val
+
+@app.get("/")
+def home():
+    return {"status": "Chronos AI Engine is Running", "endpoint": "/predict"}
 
 @app.get("/predict")
 def get_prediction():
@@ -70,7 +94,5 @@ def get_prediction():
         "signal_type": signal
     }
     
-    # Kirim data ke Supabase agar Vercel bisa baca history-nya
     save_to_supabase(payload)
-    
     return payload
