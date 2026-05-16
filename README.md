@@ -1,11 +1,12 @@
 ---
 title: Chronos
-emoji: ⚡
-colorFrom: green
-colorTo: green
-sdk: docker
+emoji: 🛡️
+colorFrom: blue
+colorTo: black
+sdk: streamlit
+app_file: app.py
 pinned: false
-license: mit
 ---
 
-Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference
+# Chronos AI Command Center
+Production-ready trading bot monitor.
